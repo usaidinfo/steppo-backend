@@ -2,18 +2,52 @@
 const router = require('express').Router();
 const Step = require('../models/Steps');
 const auth = require('../middleware/auth');
+const User = require('../models/User'); // Add this
+const mongoose = require('mongoose');
 
 router.get('/test', (req, res) => res.send('Test route'));
 
-// Post steps
+// Update or create steps for today
 router.post('/', auth, async (req, res) => {
   try {
-    const steps = new Step({
+    const { count } = req.body;
+    
+    // Get start of today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    let steps = await Step.findOne({
       user: req.user.id,
-      count: req.body.count
+      date: {
+        $gte: today,
+        $lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+      }
     });
-    await steps.save();
-    res.json(steps);
+
+    if (steps) {
+      steps.count = count;
+      await steps.save();
+    } else {
+      steps = new Step({
+        user: req.user.id,
+        count: count,
+        date: today
+      });
+      await steps.save();
+    }
+
+    const user = await User.findById(req.user.id);
+    
+    let notification = null;
+    if (count >= user.dailyGoal) {
+      notification = {
+        type: 'GOAL_COMPLETED',
+        message: `Congratulations! You've reached your daily goal of ${user.dailyGoal} steps!`,
+        achievement: 'Daily Goal Reached'
+      };
+    }
+
+    res.json({ steps, notification });
   } catch (err) {
     console.error('Error:', err);
     res.status(500).send('Server error');
@@ -67,52 +101,6 @@ router.get('/weekly', auth, async (req, res) => {
         message: 'Steps history deleted',
         deletedCount: result.deletedCount 
       });
-    } catch (err) {
-      res.status(500).send('Server error');
-    }
-  });
-
-  router.post('/', auth, async (req, res) => {
-    try {
-      const { count } = req.body;
-      const steps = new Step({
-        user: req.user.id,
-        count
-      });
-      await steps.save();
-  
-      // Check daily goal completion
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      const dailySteps = await Step.aggregate([
-        {
-          $match: {
-            user: new mongoose.Types.ObjectId(req.user.id),
-            date: { $gte: today }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: "$count" }
-          }
-        }
-      ]);
-  
-      const user = await User.findById(req.user.id);
-      const totalSteps = dailySteps[0]?.total || 0;
-  
-      let notification = null;
-      if (totalSteps >= user.dailyGoal) {
-        notification = {
-          type: 'GOAL_COMPLETED',
-          message: `Congratulations! You've reached your daily goal of ${user.dailyGoal} steps!`,
-          achievement: 'Daily Goal Reached'
-        };
-      }
-  
-      res.json({ steps, notification });
     } catch (err) {
       res.status(500).send('Server error');
     }
